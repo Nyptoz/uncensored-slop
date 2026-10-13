@@ -1,0 +1,100 @@
+# ============================================================================
+# Uncensored AI Workshop — .gitignore
+# ============================================================================
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyd
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.env/
+.venv/
+*env/
+
+# Node modules
+node_modules/
+
+# Model files (too large, downloaded on demand)
+user_data/models/*.gguf
+user_data/models/README.md
+user_data/models/*.safetensors
+
+# Cache
+__pycache__/
+*.pyc
+*.pyo
+*.mo
+*.cache/
+*.log
+logs/
+.DS_Store
+Thumbs.db
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# Log files
+*.log
+*.log.*
+logs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+ noseids/
+
+# Coverage
+.coverage
+htmlcov/
+coverage.xml
+*.cover
+
+# PyInstaller
+*.manifest
+*.spec
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Large model files (uncomment if you want to commit models)
+# !user_data/models/README.md
