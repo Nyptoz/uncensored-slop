@@ -1,0 +1,182 @@
+import concurrent.futures
+import ipaddress
+import socket
+from concurrent.futures import as_completed
+from datetime import datetime
+from urllib.parse import urljoin, urlparse
+
+import requests
+from ddgs import DDGS
+
+from modules import shared
+from modules.logging_colors import logger
+
+
+def _validate_url(url):
+    """Validate that a URL is safe to fetch (not targeting private/internal networks)."""
+    # Reject characters that cause parsing discrepancies between urlparse and requests,
+    # which can be exploited to bypass SSRF protections (GHSA-27xf-58m5-vxmc).
+    if '\\' in url:
+        raise ValueError("Invalid URL: backslashes are not allowed")
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ('http', 'https'):
+        raise ValueError(f"Unsupported URL scheme: {parsed.scheme}")
+
+    if '@' in parsed.netloc:
+        raise ValueError("Invalid URL: userinfo (credentials) in URLs is not allowed")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("No hostname in URL")
+
+    # Resolve hostname and check all returned addresses
+    try:
+        for family, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
+            ip = ipaddress.ip_address(sockaddr[0])
+            if not ip.is_global:
+                raise ValueError(f"Access to non-public address {ip} is blocked")
+    except socket.gaierror:
+        raise ValueError(f"Could not resolve hostname: {hostname}")
+
+
+def safe_get(url, headers=None, timeout=10, max_redirects=5):
+    """Fetch a URL with SSRF-safe redirect handling. Validates every hop."""
+    _validate_url(url)
+    for _ in range(max_redirects):
+        response = requests.get(url, headers=headers, timeout=timeout, allow_redirects=False)
+        if response.is_redirect and 'Location' in response.headers:
+            url = urljoin(url, response.headers['Location'])
+            _validate_url(url)
+        else:
+            return response
+
+    raise ValueError(f"Too many redirects (max {max_redirects})")
+
+
+def get_current_timestamp():
+    """Returns the current time in 24-hour format"""
+    return datetime.now().strftime('%b %d, %Y %H:%M')
+
+
+def download_web_page(url, timeout=10, include_links=False):
+    """
+    Download a web page and extract its main content as Markdown text.
+    """
+    import trafilatura
+
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
+        }
+        response = safe_get(url, headers=headers, timeout=timeout)
+        response.raise_for_status()
+
+        result = trafilatura.extract(
+            response.text,
+            include_links=include_links,
+            output_format='markdown',
+            url=url
+        )
+        return result or ""
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error downloading {url}: {e}")
+        return ""
+    except Exception as e:
+        logger.error(f"An unexpected error occurred: {e}")
+        return ""
+
+
+def perform_web_search(query, num_pages=3, max_workers=5, fetch_content=True):
+    """Perform web search and return results, optionally with page content"""
+    try:
+        kwargs = {'max_results': num_pages} if num_pages is not None else {}
+        results = DDGS().text(query, **kwargs)
+
+        search_results = [
+            {'title': r['title'], 'url': r['href'], 'snippet': r.get('body', ''), 'content': ''}
+            for r in results
+        ]
+
+        if not fetch_content:
+            return search_results
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_index = {
+                executor.submit(download_web_page, r['url']): i
+                for i, r in enumerate(search_results)
+            }
+            for future in as_completed(future_to_index):
+                i = future_to_index[future]
+                try:
+                    search_results[i]['content'] = future.result()
+                except Exception as e:
+                    logger.error(f"Error fetching {search_results[i]['url']}: {e}")
+
+        return search_results
+
+    except Exception as e:
+        logger.error(f"Error performing web search: {e}")
+        return []
+
+
+def truncate_content_by_tokens(content, max_tokens=8192):
+    """Truncate content to fit within token limit using binary search"""
+    if len(shared.tokenizer.encode(content)) <= max_tokens:
+        return content
+
+    left, right = 0, len(content)
+    while left < right:
+        mid = (left + right + 1) // 2
+        if len(shared.tokenizer.encode(content[:mid])) <= max_tokens:
+            left = mid
+        else:
+            right = mid - 1
+
+    return content[:left]
+
+
+def add_web_search_attachments(history, row_idx, user_message, search_query, state):
+    """Perform web search and add results as attachments"""
+    if not search_query:
+        logger.warning("No search query provided")
+        return
+
+    try:
+        logger.info(f"Using search query: {search_query}")
+
+        # Perform web search
+        num_pages = int(state.get('web_search_pages', 3))
+        search_results = perform_web_search(search_query, num_pages)
+
+        if not search_results:
+            logger.warning("No search results found")
+            return
+
+        # Filter out failed downloads before adding attachments
+        successful_results = [result for result in search_results if result['content'].strip()]
+
+        if not successful_results:
+            logger.warning("No successful downloads to add as attachments")
+            return
+
+        # Add search results as attachments
+        key = f"user_{row_idx}"
+        if key not in history['metadata']:
+            history['metadata'][key] = {"timestamp": get_current_timestamp()}
+        if "attachments" not in history['metadata'][key]:
+            history['metadata'][key]["attachments"] = []
+
+        for result in successful_results:
+            attachment = {
+                "name": result['title'],
+                "type": "text/html",
+                "url": result['url'],
+                "content": truncate_content_by_tokens(result['content'])
+            }
+            history['metadata'][key]["attachments"].append(attachment)
+
+        logger.info(f"Added {len(successful_results)} successful web search results as attachments.")
+
+    except Exception as e:
+        logger.error(f"Error in web search: {e}")

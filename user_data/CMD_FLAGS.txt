@@ -1,0 +1,18 @@
+# ============================================================================
+# Uncensored AI Workshop — Settings (source in launcher script)
+# ============================================================================
+# The server's CMD_FLAGS.txt is read and shlex.split()'d as CLI args.
+# Format: space-separated command-line flags (e.g. --ctx-size 4096 --threads 6)
+# Adjust in the GUI (Model tab) or here, then restart the server.
+#
+# MEMORY SAFTEY (< 4 GB total RAM:
+#   - ctx-size 4096: context is preallocated — smaller = less RAM
+#   - threads 6: physical cores
+#   - gpu-layers 0: CPU only (no VRAM needed)
+# ============================================================================
+
+--ctx-size 4096
+--threads 6
+--loader llama.cpp
+--gpu-layers 0
+--cache-type 1

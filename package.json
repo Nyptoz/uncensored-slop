@@ -1,0 +1,12 @@
+{
+  "name": "Uncensored AI Workshop",
+  "version": "1.0.0",
+  "description": "GUI + CLI workspace for running local uncensored models efficiently (<4 GB RAM).",
+  "main": "server.py",
+  "scripts": {
+    "start": "python server.py --portable --api --auto-launch",
+    "start:gpu": "python server.py --portable --api --auto-launch --gpu-layers 35"
+  },
+  "author": "Uncensored AI Workshop",
+  "license": "MIT"
+}

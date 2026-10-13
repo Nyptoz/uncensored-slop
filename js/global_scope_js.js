@@ -1,0 +1,495 @@
+// -------------------------------------------------
+// Shared helpers
+// -------------------------------------------------
+
+function getProfilePictureUrl() {
+  const thumb = document.querySelector(".pfp_character");
+  if (thumb) return thumb.src.replace("pfp_character_thumb.png", "pfp_character.png");
+  return "/file/user_data/cache/pfp_character.png?time=" + Date.now();
+}
+
+const MESSAGE_SELECTOR = ".message, .user-message, .assistant-message";
+
+function getMessageElement(element) {
+  if (!element) return null;
+  return element.closest(MESSAGE_SELECTOR);
+}
+
+function isUserRole(messageElement) {
+  return messageElement.classList.contains("user-message") ||
+         messageElement.querySelector(".text-you") !== null ||
+         messageElement.querySelector(".circle-you") !== null;
+}
+
+// Trigger a synthetic 'input' event so Gradio picks up programmatic value changes
+function dispatchGradioInput(element) {
+  element.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+// -------------------------------------------------
+// Event handlers
+// -------------------------------------------------
+
+function copyToClipboard(element) {
+  const messageElement = getMessageElement(element);
+  if (!messageElement) return;
+
+  const rawText = messageElement.getAttribute("data-raw");
+  if (!rawText) return;
+
+  const copyPromise = navigator.clipboard && window.isSecureContext
+    ? navigator.clipboard.writeText(rawText)
+    : fallbackCopyToClipboard(rawText);
+
+  copyPromise.then(function() {
+    const originalSvg = element.innerHTML;
+    element.innerHTML = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" class=\"text-green-500 dark:text-green-400\"><path d=\"M5 12l5 5l10 -10\"></path></svg>";
+    setTimeout(() => {
+      element.innerHTML = originalSvg;
+    }, 1000);
+  }).catch(function(err) {
+    console.error("Failed to copy text: ", err);
+  });
+}
+
+function fallbackCopyToClipboard(text) {
+  return new Promise((resolve, reject) => {
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.style.position = "fixed";
+    textArea.style.left = "-9999px";
+    textArea.style.top = "-9999px";
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    try {
+      const successful = document.execCommand("copy");
+      document.body.removeChild(textArea);
+      successful ? resolve() : reject();
+    } catch (err) {
+      document.body.removeChild(textArea);
+      reject(err);
+    }
+  });
+}
+
+function branchHere(element) {
+  const messageElement = getMessageElement(element);
+  if (!messageElement) return;
+
+  const index = messageElement.getAttribute("data-index");
+  if (!index) return;
+
+  const branchIndexInput = document.getElementById("Branch-index").querySelector("input");
+  if (!branchIndexInput) {
+    console.error("Element with ID 'Branch-index' not found.");
+    return;
+  }
+  const branchButton = document.getElementById("Branch");
+
+  if (!branchButton) {
+    console.error("Required element 'Branch' not found.");
+    return;
+  }
+
+  branchIndexInput.value = index;
+  dispatchGradioInput(branchIndexInput);
+  branchButton.click();
+}
+
+// -------------------------------------------------
+// Message Editing Functions
+// -------------------------------------------------
+
+function editHere(buttonElement) {
+  const messageElement = getMessageElement(buttonElement);
+  if (!messageElement) return;
+
+  const messageBody = messageElement.querySelector(".message-body");
+  if (!messageBody) return;
+
+  // If already editing, focus the textarea
+  const existingTextarea = messageBody.querySelector(".editing-textarea");
+  if (existingTextarea) {
+    existingTextarea.focus();
+    return;
+  }
+
+  startEditing(messageElement, messageBody, isUserRole(messageElement));
+}
+
+function startEditing(messageElement, messageBody, isUserMessage) {
+  const rawText = messageElement.getAttribute("data-raw") || messageBody.textContent;
+  const originalHTML = messageBody.innerHTML;
+
+  // Create editing interface
+  const editingInterface = createEditingInterface(rawText);
+
+  // Replace message content
+  messageBody.innerHTML = "";
+  messageBody.appendChild(editingInterface.textarea);
+  messageBody.appendChild(editingInterface.controls);
+
+  editingInterface.textarea.focus();
+  editingInterface.textarea.setSelectionRange(rawText.length, rawText.length);
+
+  // Temporarily mark as scrolled to prevent auto-scroll
+  const wasScrolled = window.isScrolled;
+  window.isScrolled = true;
+
+  // Scroll the textarea into view
+  editingInterface.textarea.scrollIntoView({
+    behavior: "smooth",
+    block: "center"
+  });
+
+  // Restore the original scroll state after animation
+  setTimeout(() => {
+    window.isScrolled = wasScrolled;
+  }, 500);
+
+  // Setup event handlers
+  setupEditingHandlers(editingInterface.textarea, messageElement, originalHTML, messageBody, isUserMessage);
+}
+
+function createEditingInterface(text) {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.className = "editing-textarea";
+  textarea.rows = Math.max(3, text.split("\n").length);
+
+  const controls = document.createElement("div");
+  controls.className = "edit-controls-container";
+
+  const saveButton = document.createElement("button");
+  saveButton.textContent = "Save";
+  saveButton.className = "edit-control-button";
+  saveButton.type = "button";
+
+  const cancelButton = document.createElement("button");
+  cancelButton.textContent = "Cancel";
+  cancelButton.className = "edit-control-button edit-cancel-button";
+  cancelButton.type = "button";
+
+  controls.appendChild(saveButton);
+  controls.appendChild(cancelButton);
+
+  return { textarea, controls, saveButton, cancelButton };
+}
+
+function setupEditingHandlers(textarea, messageElement, originalHTML, messageBody, isUserMessage) {
+  const saveButton = messageBody.querySelector(".edit-control-button:not(.edit-cancel-button)");
+  const cancelButton = messageBody.querySelector(".edit-cancel-button");
+
+  const submitEdit = () => {
+    const index = messageElement.getAttribute("data-index");
+    if (!index || !submitMessageEdit(index, textarea.value, isUserMessage)) {
+      cancelEdit();
+    }
+  };
+
+  const cancelEdit = () => {
+    messageBody.innerHTML = originalHTML;
+  };
+
+  // Event handlers
+  saveButton.onclick = submitEdit;
+  cancelButton.onclick = cancelEdit;
+
+  textarea.onkeydown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      submitEdit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancelEdit();
+    }
+  };
+}
+
+function submitMessageEdit(index, newText, isUserMessage) {
+  const editIndexInput = document.getElementById("Edit-message-index")?.querySelector("input");
+  const editTextInput = document.getElementById("Edit-message-text")?.querySelector("textarea");
+  const editRoleInput = document.getElementById("Edit-message-role")?.querySelector("textarea");
+  const editButton = document.getElementById("Edit-message");
+
+  if (!editIndexInput || !editTextInput || !editRoleInput || !editButton) {
+    console.error("Edit elements not found");
+    return false;
+  }
+
+  editIndexInput.value = index;
+  editTextInput.value = newText;
+  editRoleInput.value = isUserMessage ? "user" : "assistant";
+
+  dispatchGradioInput(editIndexInput);
+  dispatchGradioInput(editTextInput);
+  dispatchGradioInput(editRoleInput);
+
+  editButton.click();
+  return true;
+}
+
+function navigateVersion(element, direction) {
+  const messageElement = getMessageElement(element);
+  if (!messageElement) return;
+
+  const index = messageElement.getAttribute("data-index");
+  if (!index) return;
+
+  const role = isUserRole(messageElement) ? "user" : "assistant";
+
+  const indexInput = document.getElementById("Navigate-message-index")?.querySelector("input");
+  const directionInput = document.getElementById("Navigate-direction")?.querySelector("textarea");
+  const roleInput = document.getElementById("Navigate-message-role")?.querySelector("textarea");
+  const navigateButton = document.getElementById("Navigate-version");
+
+  if (!indexInput || !directionInput || !roleInput || !navigateButton) {
+    console.error("Navigation control elements (index, direction, role, or button) not found.");
+    return;
+  }
+
+  indexInput.value = index;
+  directionInput.value = direction;
+  roleInput.value = role;
+
+  dispatchGradioInput(indexInput);
+  dispatchGradioInput(directionInput);
+  dispatchGradioInput(roleInput);
+
+  navigateButton.click();
+}
+
+function regenerateClick() {
+  document.getElementById("Regenerate").click();
+}
+
+function continueClick() {
+  document.getElementById("Continue").click();
+}
+
+function removeLastClick() {
+  document.getElementById("Remove-last").click();
+}
+
+let _scrollPending = false;
+const SMOOTH_SCROLL_WINDOW_MS = 700;
+
+function autoScrollToBottom() {
+  if (_scrollPending) return;
+  _scrollPending = true;
+  queueMicrotask(() => {
+    _scrollPending = false;
+    if (!window.isScrolled) {
+      const chatParent = document.getElementById("chat")?.parentNode?.parentNode?.parentNode;
+      if (chatParent) {
+        const maxScroll = chatParent.scrollHeight - chatParent.clientHeight;
+        if (maxScroll > 0 && chatParent.scrollTop < maxScroll - 1) {
+          if (Date.now() < window.smoothScrollUntilTs) {
+            chatParent.scrollTo({ top: maxScroll, behavior: "smooth" });
+          } else {
+            chatParent.scrollTop = maxScroll;
+          }
+        }
+      }
+    }
+  });
+}
+
+function updateInstructPadding() {
+  const chatElement = document.getElementById("chat");
+  const messagesContainer = chatElement?.querySelector(".messages");
+  if (!messagesContainer) return;
+
+  // The top-anchored buffer only applies in instruct mode with something to
+  // anchor against; everything else clears it, so the space can't leak across
+  // a mode switch.
+  let bufferHeight = 0;
+  if (chatElement.getAttribute("data-mode") === "instruct") {
+    const lastChild = messagesContainer.lastElementChild;
+    const prevSibling = lastChild?.previousElementSibling;
+    if (lastChild && prevSibling && chatElement.offsetHeight > 0) {
+      // Target the scroll container's *content* height — clientHeight minus
+      // its own vertical padding — so the buffer fills the viewport exactly
+      // instead of overshooting by that padding into a permanent scrollbar.
+      // The viewport-128 term floors the buffer so a tall previous message
+      // can't shrink it away.
+      const chatParent = document.querySelector(".chat-parent");
+      let viewport = window.innerHeight;
+      if (chatParent) {
+        const cs = getComputedStyle(chatParent);
+        viewport = chatParent.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+      }
+      bufferHeight = Math.max(0, Math.max(viewport - 128, viewport - prevSibling.offsetHeight) - lastChild.offsetHeight);
+    }
+  }
+
+  const next = bufferHeight ? `${bufferHeight}px` : "";
+  if (messagesContainer.style.paddingBottom !== next) {
+    messagesContainer.style.paddingBottom = next;
+  }
+}
+
+let pendingMorphdomData = null;
+let morphdomRafId = null;
+
+function handleMorphdomUpdate(data) {
+  pendingMorphdomData = data;
+  if (!morphdomRafId) {
+    morphdomRafId = requestAnimationFrame(() => {
+      morphdomRafId = null;
+      applyMorphdomUpdate(pendingMorphdomData);
+      pendingMorphdomData = null;
+    });
+  }
+}
+
+function applyMorphdomUpdate(data) {
+  // Determine target element and use it as query scope
+  let target_element, target_html;
+  if (data.last_message_only) {
+    const childNodes = document.getElementsByClassName("messages")[0].childNodes;
+    target_element = childNodes[childNodes.length - 1];
+    target_html = data.html;
+  } else {
+    target_element = document.getElementById("chat").parentNode;
+    target_html =  "<div class=\"prose svelte-1ybaih5\">" + data.html + "</div>";
+  }
+
+  const queryScope = target_element;
+
+  const messagesContainer = document.getElementsByClassName("messages")[0];
+  const messagesCountBefore = messagesContainer ? messagesContainer.children.length : 0;
+  // Survive morphdom: server HTML has no inline style.
+  const savedPaddingBottom = messagesContainer ? messagesContainer.style.paddingBottom : "";
+
+  // Track open/closed blocks and store scroll positions for open ones
+  const openBlocks = new Set();
+  const closedBlocks = new Set();
+  const scrollPositions = {};
+  queryScope.querySelectorAll(".thinking-block").forEach(block => {
+    const blockId = block.getAttribute("data-block-id");
+    if (!blockId || block.querySelector(".tool-approval-buttons")) return;
+    if (block.hasAttribute("open")) {
+      openBlocks.add(blockId);
+      const content = block.querySelector(".thinking-content");
+      if (content) {
+        const isAtBottom = Math.abs((content.scrollHeight - content.scrollTop) - content.clientHeight) < 5;
+        scrollPositions[blockId] = {
+          position: content.scrollTop,
+          isAtBottom: isAtBottom
+        };
+      }
+    } else {
+      closedBlocks.add(blockId);
+    }
+  });
+
+  morphdom(
+    target_element,
+    target_html,
+    {
+      onBeforeElUpdated: function(fromEl, toEl) {
+        // Preserve code highlighting
+        if (fromEl.tagName === "PRE") {
+          const fromCode = fromEl.querySelector("code[data-highlighted]");
+          const toCode = toEl.querySelector("code");
+
+          if (fromCode && toCode && fromCode.textContent === toCode.textContent) {
+            toEl.className = fromEl.className;
+            toEl.innerHTML = fromEl.innerHTML;
+            return false;
+          }
+        }
+
+        // For thinking blocks that already exist in the DOM, preserve the
+        // user's toggle state across streaming updates (in either direction).
+        // New blocks fall through to the server-rendered open/closed state.
+        if (fromEl.classList && fromEl.classList.contains("thinking-block") &&
+           toEl.classList && toEl.classList.contains("thinking-block")) {
+          const blockId = toEl.getAttribute("data-block-id");
+          if (blockId && openBlocks.has(blockId)) {
+            toEl.setAttribute("open", "");
+          } else if (blockId && closedBlocks.has(blockId)) {
+            toEl.removeAttribute("open");
+          }
+        }
+
+        return !fromEl.isEqualNode(toEl);
+      },
+
+      onElUpdated: function(el) {
+        // Restore scroll positions for open thinking blocks
+        if (el.classList && el.classList.contains("thinking-block") && el.hasAttribute("open")) {
+          const blockId = el.getAttribute("data-block-id");
+          const content = el.querySelector(".thinking-content");
+
+          if (content && blockId && scrollPositions[blockId]) {
+            setTimeout(() => {
+              if (scrollPositions[blockId].isAtBottom) {
+                content.scrollTop = content.scrollHeight;
+              } else {
+                content.scrollTop = scrollPositions[blockId].position;
+              }
+            }, 0);
+          }
+        }
+      }
+    }
+  );
+
+  // Re-apply the saved buffer only if the messages list still exists after
+  // morphdom. When the chat empties, morphdom repurposes that node into the
+  // welcome greeting (stripping its inline style); restoring the stale padding
+  // onto it would leave a phantom scrollbar that updateInstructPadding can't
+  // clear, since it keys off ".messages".
+  const messagesAfter = document.getElementsByClassName("messages")[0];
+  if (messagesAfter && savedPaddingBottom) {
+    messagesAfter.style.paddingBottom = savedPaddingBottom;
+  }
+
+  // Syntax highlighting and LaTeX
+  if (window.doSyntaxHighlighting) {
+    window.doSyntaxHighlighting();
+  }
+
+  // Only animate the padding jump on a fresh submission, not on chat switches or streaming chunks.
+  if (window.pendingGenerationStart) {
+    const messagesCountAfter = messagesContainer ? messagesContainer.children.length : 0;
+    if (messagesCountAfter > messagesCountBefore) {
+      window.smoothScrollUntilTs = Date.now() + SMOOTH_SCROLL_WINDOW_MS;
+    }
+    window.pendingGenerationStart = false;
+  }
+
+  // Auto-scroll runs both before and after padding update.
+  // Before: so content growth isn't hidden by padding absorption.
+  // After: so padding-added space is also scrolled into view.
+  autoScrollToBottom();
+  updateInstructPadding();
+  autoScrollToBottom();
+
+  // Add toggle listeners for new blocks
+  queryScope.querySelectorAll(".thinking-block").forEach(block => {
+    if (!block._hasToggleListener) {
+      block.addEventListener("toggle", function(e) {
+        const wasScrolled = window.isScrolled;
+        if (this.open) {
+          const content = this.querySelector(".thinking-content");
+          if (content) {
+            setTimeout(() => {
+              content.scrollTop = content.scrollHeight;
+            }, 0);
+          }
+        }
+        autoScrollToBottom();
+        updateInstructPadding();
+        autoScrollToBottom();
+        // Restore scroll state so the browser's layout adjustment
+        // from the toggle doesn't disable auto-scroll
+        window.isScrolled = wasScrolled;
+      });
+      block._hasToggleListener = true;
+    }
+  });
+}
