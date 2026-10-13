@@ -53,48 +53,12 @@ Thumbs.db
 .DS_Store?
 ._*
 .Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
+
+# Large model files (uncomment if you want to commit models)
+# !user_data/models/README.md
 
 # Temporary files
 *.tmp
 *.bak
 *.swp
 *~
-
-# Log files
-*.log
-*.log.*
-logs/
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
- noseids/
-
-# Coverage
-.coverage
-htmlcov/
-coverage.xml
-*.cover
-
-# PyInstaller
-*.manifest
-*.spec
-
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-.python-version
-
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# Large model files (uncomment if you want to commit models)
-# !user_data/models/README.md
